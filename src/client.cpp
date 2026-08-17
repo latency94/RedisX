@@ -3,8 +3,10 @@
 #include "command.hpp"
 #include "database.hpp"
 
+#include <cerrno>
 #include <cstring>
 #include <iostream>
+
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -15,42 +17,105 @@ Client::Client(int socket_fd)
 {
 }
 
+bool Client::send_all(const std::string& response)
+{
+    std::size_t total_sent = 0;
+
+    while (total_sent < response.size())
+    {
+        ssize_t bytes_sent = send(
+            socket_fd_,
+            response.data() + total_sent,
+            response.size() - total_sent,
+            0
+        );
+
+        if (bytes_sent < 0)
+        {
+            if (errno == EINTR)
+                continue;
+
+            std::cerr << "send failed: "
+                      << std::strerror(errno)
+                      << '\n';
+
+            return false;
+        }
+
+        if (bytes_sent == 0)
+            return false;
+
+        total_sent += static_cast<std::size_t>(bytes_sent);
+    }
+
+    return true;
+}
+
 void Client::handle()
 {
     Parser parser;
     Command command(database);
 
-    char buffer[1024];
+    char buffer[4096];
 
     while (true)
     {
-        memset(buffer, 0, sizeof(buffer));
+        ssize_t bytes_received = recv(
+            socket_fd_,
+            buffer,
+            sizeof(buffer),
+            0
+        );
 
-        int bytes = recv(socket_fd_, buffer, sizeof(buffer) - 1, 0);
-
-        if (bytes <= 0)
+        if (bytes_received == 0)
             break;
 
-        buffer[bytes] = '\0';
+        if (bytes_received < 0)
+        {
+            if (errno == EINTR)
+                continue;
 
-        std::string input(buffer);
+            std::cerr << "recv failed: "
+                      << std::strerror(errno)
+                      << '\n';
 
-        if (!input.empty() && input.back() == '\n')
-            input.pop_back();
+            break;
+        }
 
-        if (!input.empty() && input.back() == '\r')
-            input.pop_back();
+        read_buffer_.append(
+            buffer,
+            static_cast<std::size_t>(bytes_received)
+        );
 
-        auto tokens = parser.parse(input);
+        while (true)
+        {
+            std::size_t newline_pos =
+                read_buffer_.find('\n');
 
-        std::string response = command.execute(tokens);
+            if (newline_pos == std::string::npos)
+                break;
 
-        response += "\n";
+            std::string input =
+                read_buffer_.substr(0, newline_pos);
 
-        send(socket_fd_,
-             response.c_str(),
-             response.size(),
-             0);
+            read_buffer_.erase(
+                0,
+                newline_pos + 1
+            );
+
+            if (!input.empty() && input.back() == '\r')
+                input.pop_back();
+
+            auto tokens = parser.parse(input);
+
+            std::string response =
+                command.execute(tokens);
+
+            response += "\n";
+
+            if (!send_all(response))
+                return;
+        }
     }
 
     close(socket_fd_);

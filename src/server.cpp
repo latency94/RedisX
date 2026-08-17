@@ -2,7 +2,10 @@
 #include "client.hpp"
 
 #include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
 #include <iostream>
+#include <thread>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -18,19 +21,32 @@ void Server::start()
 
     if (server_fd_ < 0)
     {
-        std::cerr << "Socket creation failed\n";
+        std::cerr << "socket() failed: "
+                  << std::strerror(errno)
+                  << '\n';
+
         return;
     }
 
     int opt = 1;
 
-    setsockopt(
+    if (setsockopt(
         server_fd_,
         SOL_SOCKET,
         SO_REUSEADDR,
         &opt,
         sizeof(opt)
-    );
+    ) < 0)
+    {
+        std::cerr << "setsockopt() failed: "
+                  << std::strerror(errno)
+                  << '\n';
+
+        close(server_fd_);
+        server_fd_ = -1;
+
+        return;
+    }
 
     sockaddr_in address{};
 
@@ -38,19 +54,31 @@ void Server::start()
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(port_);
 
-    if (bind(server_fd_,
-             (sockaddr*)&address,
-             sizeof(address)) < 0)
+    if (bind(
+        server_fd_,
+        (sockaddr*)&address,
+        sizeof(address)
+    ) < 0)
     {
-        std::cerr << "Bind failed\n";
+        std::cerr << "bind() failed: "
+                  << std::strerror(errno)
+                  << '\n';
+
         close(server_fd_);
+        server_fd_ = -1;
+
         return;
     }
 
     if (listen(server_fd_, 5) < 0)
     {
-        std::cerr << "Listen failed\n";
+        std::cerr << "listen() failed: "
+                  << std::strerror(errno)
+                  << '\n';
+
         close(server_fd_);
+        server_fd_ = -1;
+
         return;
     }
 
@@ -72,16 +100,25 @@ void Server::start()
 
         if (client_socket < 0)
         {
-            std::cerr << "Accept failed\n";
+            std::cerr << "accept() failed: "
+                      << std::strerror(errno)
+                      << '\n';
+
             continue;
         }
 
         std::cout << "Client Connected\n";
 
-        Client client(client_socket);
-        client.handle();
+        std::thread client_thread([client_socket]()
+        {
+            Client client(client_socket);
 
-        std::cout << "Client Disconnected\n";
+            client.handle();
+
+            std::cout << "Client Disconnected\n";
+        });
+
+        client_thread.detach();
     }
 
     close(server_fd_);

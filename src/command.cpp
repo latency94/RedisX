@@ -1,5 +1,6 @@
 #include "command.hpp"
-
+#include <algorithm>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -8,12 +9,18 @@ Command::Command(Database& db)
 {
 }
 
+
 std::string Command::execute(const std::vector<std::string>& tokens)
 {
     if (tokens.empty())
         return "ERROR";
 
     const std::string& cmd = tokens[0];
+    
+        if (cmd == "PING")
+    {
+        return "PONG";
+    }
 
     if (cmd == "SET")
     {
@@ -52,6 +59,8 @@ std::string Command::execute(const std::vector<std::string>& tokens)
 
         return db_.exists(tokens[1]) ? "1" : "0";
     }
+
+    
 
     return "Unknown Command";
 }
